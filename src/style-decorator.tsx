@@ -56,8 +56,8 @@ export function Styled(): ConstructibleStyleDecorator {
      * @returns
      */
     function styleSheetRenderer() {
-      const cssText = this[propertyKey]();
       let renderedNode: VNode = originalRender.call(this);
+      const cssText = this[propertyKey](this);
 
       if (!isHost(renderedNode)) {
         renderedNode = <Host>{ renderedNode }</Host>;
@@ -81,7 +81,26 @@ export function Styled(): ConstructibleStyleDecorator {
         document.head.appendChild(style);
       }
 
+      this.__lastRenderer = renderedNode;
+
       return renderedNode;
+    }
+
+    function styleSheetUpdater() {
+      const cssText = this[propertyKey](this);
+
+      if ('attachShadow' in HTMLElement.prototype) {
+        // Attach to Host element.
+        if (!this.__lastRenderer) {
+          return;
+        }
+
+        this.__lastRenderer["$elm$"].styleSheets["0"].ownerNode.innerHTML = cssText;
+      } else if (target.__styleElement) {
+        // Update style inside head.
+        const style = target.__styleElement;
+        style.innerHTML = cssText;
+      }
     }
 
     if (supportsConstructibleStylesheets) {
@@ -101,14 +120,34 @@ export function Styled(): ConstructibleStyleDecorator {
         };
 
         themeProvider.subscribe(this.__themeListener);
-        return originalConnected.call(this);
+        return originalConnected && originalConnected.call(this);
       };
       target.disconnectedCallback = function() {
         themeProvider.unsubscribe(this.__themeListener);
 
-        return originalDisconnected.call(this);
+        return originalDisconnected && originalDisconnected.call(this);
       };
     } else {
+      target.componentWillLoad = function() {
+        this.theme = themeProvider.theme;
+        
+        return originalWillLoad && originalWillLoad.call(this);
+      };
+      target.connectedCallback = function() {
+        this.__themeListener = (theme) => {
+          this.theme = theme;
+          styleSheetUpdater.call(this);
+        };
+
+        themeProvider.subscribe(this.__themeListener);
+        return originalConnected && originalConnected.call(this);
+      };
+      target.disconnectedCallback = function() {
+        themeProvider.unsubscribe(this.__themeListener);
+
+        return originalDisconnected && originalDisconnected.call(this);
+      };
+
       // Fallback for old browser versions.
       target.render = styleSheetRenderer;
     }
