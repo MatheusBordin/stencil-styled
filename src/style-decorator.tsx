@@ -4,7 +4,8 @@ import { ConstructibleStyleDecorator } from "./types/constructible-style-decorat
 import { supportsConstructibleStylesheets } from "./utils/support-helper";
 import { getOrCreateStylesheet, appendStyleToHost } from "./utils/stylesheet-helper";
 import { isHost } from "./utils/host-helper";
-import { themeProvider } from "./theme/theme-provider";
+import { ThemeProvider } from "./theme";
+import { instanceToProps } from "./instance-parser";
 
 /**
  * Decorator for dinamicaly add and update stylesheet's.
@@ -25,7 +26,15 @@ export function Styled(): ConstructibleStyleDecorator {
     }
 
     if (!originalWillUpdate) {
-      console.warn(`ConstructibleStyle requires you to have a \`componentWillLoad\` lifecycle method in \`${ target.constructor.name }\`. Failure to add this function may cause ConstructibleStyle to fail due to StencilJS build optimizations.`);
+      console.warn(`ConstructibleStyle requires you to have a \`componentWillUpdate\` lifecycle method in \`${ target.constructor.name }\`. Failure to add this function may cause ConstructibleStyle to fail due to StencilJS build optimizations.`);
+    }
+
+    if (!originalConnected) {
+      console.warn(`ConstructibleStyle requires you to have a \`connectedCallback\` lifecycle method in \`${ target.constructor.name }\`. Failure to add this function may cause ConstructibleStyle to fail due to StencilJS build optimizations.`);
+    }
+
+    if (!originalDisconnected) {
+      console.warn(`ConstructibleStyle requires you to have a \`disconnectedCallback\` lifecycle method in \`${ target.constructor.name }\`. Failure to add this function may cause ConstructibleStyle to fail due to StencilJS build optimizations.`);
     }
 
     /**
@@ -38,11 +47,9 @@ export function Styled(): ConstructibleStyleDecorator {
       const root = (host.shadowRoot || host) as any;
       const originalResult = originalFunction && originalFunction.call(this);
 
-      // TODO: Remove old style after insert newest.
-      const newStyleSheet = getOrCreateStylesheet(this, propertyKey);
+      const newStyleSheet = getOrCreateStylesheet(target, this, propertyKey)
       if (newStyleSheet != null) {
         root.adoptedStyleSheets = [
-          ...(root.adoptedStyleSheets || []), 
           newStyleSheet
         ];
       }
@@ -57,7 +64,7 @@ export function Styled(): ConstructibleStyleDecorator {
      */
     function styleSheetRenderer() {
       let renderedNode: VNode = originalRender.call(this);
-      const cssText = this[propertyKey](this);
+      const cssText = this[propertyKey](instanceToProps(this));
 
       if (!isHost(renderedNode)) {
         renderedNode = <Host>{ renderedNode }</Host>;
@@ -86,8 +93,13 @@ export function Styled(): ConstructibleStyleDecorator {
       return renderedNode;
     }
 
+    /**
+     * Update stylesheet.
+     *
+     * @returns
+     */
     function styleSheetUpdater() {
-      const cssText = this[propertyKey](this);
+      const cssText = this[propertyKey](instanceToProps(this));
 
       if ('attachShadow' in HTMLElement.prototype) {
         // Attach to Host element.
@@ -106,44 +118,35 @@ export function Styled(): ConstructibleStyleDecorator {
     if (supportsConstructibleStylesheets) {
       // Append style using CSSStyleSheet object.
       target.componentWillLoad = function() {
-        this.theme = themeProvider.theme;
-        
         styleSheetCreator.call(this, originalWillLoad);
       };
       target.componentWillUpdate = function() {
         styleSheetCreator.call(this, originalWillUpdate);
       };
       target.connectedCallback = function() {
-        this.__themeListener = (theme) => {
-          this.theme = theme;
+        this.__themeSubscription = ThemeProvider.subscribe(() => {
           styleSheetCreator.call(this);
-        };
+        });
 
-        themeProvider.subscribe(this.__themeListener);
         return originalConnected && originalConnected.call(this);
       };
       target.disconnectedCallback = function() {
-        themeProvider.unsubscribe(this.__themeListener);
+        this.__themeSubscription.unsubscribe();
 
         return originalDisconnected && originalDisconnected.call(this);
       };
     } else {
       target.componentWillLoad = function() {
-        this.theme = themeProvider.theme;
-        
         return originalWillLoad && originalWillLoad.call(this);
       };
       target.connectedCallback = function() {
-        this.__themeListener = (theme) => {
-          this.theme = theme;
+        this.__themeSubscription = ThemeProvider.subscribe(() => {
           styleSheetUpdater.call(this);
-        };
-
-        themeProvider.subscribe(this.__themeListener);
+        });
         return originalConnected && originalConnected.call(this);
       };
       target.disconnectedCallback = function() {
-        themeProvider.unsubscribe(this.__themeListener);
+        this.__themeSubscription.unsubscribe();
 
         return originalDisconnected && originalDisconnected.call(this);
       };
